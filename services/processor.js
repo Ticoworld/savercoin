@@ -6,6 +6,10 @@ const { getSAVERPrice } = require('./pricing');
 const TEST_MODE_ENABLED = process.env.TEST_MODE_ENABLED === 'true';
 const TEST_BUY_DAY_INTERVAL_MINUTES = parseInt(process.env.TEST_BUY_DAY_INTERVAL_MINUTES || '3');
 const TEST_MIN_BUY_USD = parseFloat(process.env.TEST_MIN_BUY_USD || '2.0');
+const minBuyUSD = TEST_MODE_ENABLED ? TEST_MIN_BUY_USD : 10.0;
+const txTimestamp = new Date(parseInt(tx.timeStamp) * 1000);
+const contestStart = new Date(process.env.CONTEST_START_TIMESTAMP);
+const contestEnd = new Date(process.env.CONTEST_END_TIMESTAMP);
 // --- End Test Mode Configuration ---
 
 // --- Debug Logging Control ---
@@ -34,12 +38,23 @@ const processTransaction = async (tx) => {
       console.log(`[Processor] Attempting to process transaction: ${tx.hash}`);
     }
 
+    // ⏱️ Only process TXs inside the contest period
+    const txTimestamp = new Date(parseInt(tx.timeStamp) * 1000);
+    const contestStart = new Date(process.env.CONTEST_START_TIMESTAMP);
+    const contestEnd = new Date(process.env.CONTEST_END_TIMESTAMP);
+
+    if (txTimestamp < contestStart || txTimestamp > contestEnd) {
+      if (DEBUG_LOGGING_ENABLED) {
+        console.log(`[Processor] TX ${tx.hash} is outside contest window. Skipping.`);
+      }
+      return;
+    }
+
     if (!tx?.from || !tx?.to || !tx?.contractAddress || tx?.value === undefined || tx?.tokenDecimal === undefined) {
       console.warn(`[Processor] Invalid transaction structure (missing essential fields for ${tx.hash}):`, tx);
       return;
     }
 
-    // Ensure this transaction is for your specific token contract
     const tokenContractAddress = process.env.TOKEN_CONTRACT?.toLowerCase();
     if (tx.contractAddress.toLowerCase() !== tokenContractAddress) {
       if (DEBUG_LOGGING_ENABLED) {
@@ -48,7 +63,6 @@ const processTransaction = async (tx) => {
       return;
     }
 
-    // Check if already processed
     const exists = await Transaction.findOne({ txHash: tx.hash });
     if (exists) {
       if (DEBUG_LOGGING_ENABLED) {
@@ -57,18 +71,12 @@ const processTransaction = async (tx) => {
       return;
     }
 
-    // --- Refined Token Value Parsing ---
-    // BscScan API's 'value' field for token transfers is the raw token amount (e.g., in wei).
-    // 'tokenDecimal' is needed to convert it to a human-readable float.
     let tokenValue = parseFloat(tx.value) / Math.pow(10, parseInt(tx.tokenDecimal));
-    
     if (DEBUG_LOGGING_ENABLED) {
       console.log(`[Processor] Raw tx.value: ${tx.value}, tx.tokenDecimal: ${tx.tokenDecimal}`);
       console.log(`[Processor] Calculated tokenValue for ${tx.hash}: ${tokenValue}`);
     }
-    // --- End Refined Token Value Parsing ---
 
-    // Guard: skip if token value is invalid or zero
     if (isNaN(tokenValue) || tokenValue <= 0) {
       console.warn(`[Processor] Skipping TX ${tx.hash} with invalid or zero token value: ${tokenValue}`);
       return;
@@ -78,46 +86,30 @@ const processTransaction = async (tx) => {
     const fromLower = tx.from.toLowerCase();
     const toLower = tx.to.toLowerCase();
 
-    if (DEBUG_LOGGING_ENABLED) {
-      console.log(`[Processor] Checking TX ${tx.hash} for token ${tx.contractAddress}:`);
-      console.log(`[Processor]   From: ${fromLower}`);
-      console.log(`[Processor]   To: ${toLower}`);
-      console.log(`[Processor]   Is 'from' a known DEX/LP? ${PANCAKESWAP_LP_OR_ROUTER_ADDRESSES.includes(fromLower)}`);
-      console.log(`[Processor]   Is 'to' a known DEX/LP? ${PANCAKESWAP_LP_OR_ROUTER_ADDRESSES.includes(toLower)}`);
-    }
-
-    // A BUY for your token occurs when tokens are sent FROM a known DEX/LP address TO a user's wallet.
-    // Ensure the 'to' address is NOT another DEX/LP address (to filter out internal DEX transfers).
     if (PANCAKESWAP_LP_OR_ROUTER_ADDRESSES.includes(fromLower) && !PANCAKESWAP_LP_OR_ROUTER_ADDRESSES.includes(toLower)) {
       type = "buy";
-      console.log(`[Processor] Identified as BUY transaction: ${tx.hash} (Tokens sent from DEX/LP to user wallet)`);
-    }
-    // A SELL for your token occurs when tokens are sent FROM a user's wallet TO a known DEX/LP address.
-    // Ensure the 'from' address is NOT another DEX/LP address.
-    else if (PANCAKESWAP_LP_OR_ROUTER_ADDRESSES.includes(toLower) && !PANCAKESWAP_LP_OR_ROUTER_ADDRESSES.includes(fromLower)) {
+      console.log(`[Processor] Identified as BUY transaction: ${tx.hash}`);
+    } else if (PANCAKESWAP_LP_OR_ROUTER_ADDRESSES.includes(toLower) && !PANCAKESWAP_LP_OR_ROUTER_ADDRESSES.includes(fromLower)) {
       type = "sell";
-      console.log(`[Processor] Identified as SELL transaction: ${tx.hash} (Tokens sent from user wallet to DEX/LP)`);
-    }
-    else {
+      console.log(`[Processor] Identified as SELL transaction: ${tx.hash}`);
+    } else {
       if (DEBUG_LOGGING_ENABLED) {
-        console.log(`[Processor] Transaction ${tx.hash} is neither a recognized buy nor a sell type for tracking. Skipping.`);
+        console.log(`[Processor] Transaction ${tx.hash} is neither buy nor sell. Skipping.`);
       }
       return;
     }
 
-    // Create transaction record
     const newTx = new Transaction({
       txHash: tx.hash,
       blockNumber: parseInt(tx.blockNumber),
-      timestamp: new Date(parseInt(tx.timeStamp) * 1000),
+      timestamp: txTimestamp, // Use the parsed timestamp
       from: tx.from,
       to: tx.to,
-      value: parseFloat(tx.value), // Raw token value from BscScan API
-      tokenValue, // Human-readable token value
+      value: parseFloat(tx.value),
+      tokenValue,
       type,
     });
 
-    // Save and process
     await newTx.save();
     console.log(`[Processor] Transaction ${newTx.txHash} saved to DB as type: ${newTx.type}`);
 
@@ -130,6 +122,7 @@ const processTransaction = async (tx) => {
     console.error(`[Processor] Failed to process transaction ${tx?.hash || 'unknown'}:`, err.message);
   }
 };
+
 
 /**
  * Processes a 'buy' transaction, updating the associated wallet's buy history and total bought amount.
@@ -145,10 +138,10 @@ const processBuyTransaction = async (tx) => {
   console.log(`[BuyProcessor] Processing buy for ${walletAddress}. TokenValue: ${tx.tokenValue}, Price: ${price}, USDValue: $${usdValue.toFixed(4)}`);
 
   // --- Test Mode: Minimum Buy Threshold ---
-  if (TEST_MODE_ENABLED && usdValue < TEST_MIN_BUY_USD) {
-    console.log(`[BuyProcessor] Skipping buy for ${walletAddress} due to low USD value ($${usdValue.toFixed(4)} < $${TEST_MIN_BUY_USD}). TxHash: ${tx.txHash}`);
-    return; // Do not process this buy if it's below the test threshold
-  }
+  if (usdValue < minBuyUSD) {
+  console.log(`[BuyProcessor] Skipping buy for ${walletAddress} due to low USD value ($${usdValue.toFixed(4)} < $${minBuyUSD}). TxHash: ${tx.txHash}`);
+  return;
+}
   // --- End Test Mode ---
 
   // Find the wallet or create a new one if it doesn't exist

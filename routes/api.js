@@ -1,6 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const Wallet = require('../models/Wallet');
+const ContestWinner = require('../models/ContestWinner');
+
 
 // Import environment variables for test mode configuration
 const TEST_MODE_ENABLED = process.env.TEST_MODE_ENABLED === 'true';
@@ -91,5 +93,20 @@ router.get('/wallet/:address', async (req, res) => {
     res.status(500).json({ message: 'Server error' });
   }
 });
+
+// GET /winner - Fetch the snapshot winner
+router.get('/winner', async (req, res) => {
+  try {
+    const winner = await ContestWinner.findOne();
+    if (!winner) {
+      return res.status(404).json({ message: 'No winner yet' });
+    }
+    res.json(winner);
+  } catch (error) {
+    console.error('[Winner API] Error fetching winner:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
 
 module.exports = router;

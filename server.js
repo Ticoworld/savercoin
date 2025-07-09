@@ -5,6 +5,9 @@ const startCronJob = require('./jobs/sync');
 const apiRoutes = require('./routes/api');
 const { getSAVERPrice } = require('./services/pricing'); // Adjust path as needed
 const cors = require('cors');
+const runSnapshot = require('./snapshot');
+
+const cron = require('node-cron');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -15,7 +18,14 @@ app.use(cors());
 
 app.use('/api', apiRoutes);
 // ❗ You forgot the parentheses here
+cron.schedule('* * * * *', async () => {
+  const now = new Date();
+  const contestEnd = new Date(process.env.CONTEST_END_TIMESTAMP);
 
+  if (Math.abs(now - contestEnd) < 60000) {
+    await runSnapshot();
+  }
+});
 // Immediately-invoked async function to bootstrap the app after DB connects
 (async () => {
   try {
