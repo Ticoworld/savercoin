@@ -7,9 +7,11 @@ const TEST_MODE_ENABLED = process.env.TEST_MODE_ENABLED === 'true';
 const TEST_BUY_DAY_INTERVAL_MINUTES = parseInt(process.env.TEST_BUY_DAY_INTERVAL_MINUTES || '3');
 const TEST_MIN_BUY_USD = parseFloat(process.env.TEST_MIN_BUY_USD || '2.0');
 const minBuyUSD = TEST_MODE_ENABLED ? TEST_MIN_BUY_USD : 10.0;
-const txTimestamp = new Date(parseInt(tx.timeStamp) * 1000);
+
 const contestStart = new Date(process.env.CONTEST_START_TIMESTAMP);
 const contestEnd = new Date(process.env.CONTEST_END_TIMESTAMP);
+// --- End Test Mode Configuration ---
+
 // --- End Test Mode Configuration ---
 
 // --- Debug Logging Control ---

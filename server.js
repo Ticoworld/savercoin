@@ -23,9 +23,10 @@ cron.schedule('* * * * *', async () => {
   const contestEnd = new Date(process.env.CONTEST_END_TIMESTAMP);
 
   if (Math.abs(now - contestEnd) < 60000) {
-    await runSnapshot();
+    await runSnapshot(); // Now safe: doesn't kill the server
   }
 });
+
 // Immediately-invoked async function to bootstrap the app after DB connects
 (async () => {
   try {
