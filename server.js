@@ -47,6 +47,11 @@ cron.schedule('* * * * *', async () => {
     const price = await getSAVERPrice();
     console.log('Fetched SAVERCOIN Price:', price);
 
+    app.get('/', (req, res) => {
+  res.status(200).send('✅ SAVERCOIN Leaderboard server is live!');
+});
+
+
   } catch (err) {
     console.error('[Fatal Error] Failed to connect to MongoDB or start server:', err);
     process.exit(1);
